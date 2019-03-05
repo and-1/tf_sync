@@ -1,0 +1,205 @@
+#!/usr/bin/env python
+import yaml
+import logging
+import sys
+import socket
+import re
+import subprocess
+from os import listdir
+from jinja2 import Environment, FileSystemLoader, select_autoescape, TemplateNotFound
+from vnc_api import vnc_api
+
+class Config:
+  conf_home = '/etc/vnc_sync'
+  with open(conf_home+'/sync.conf','r') as file:
+    conf = yaml.safe_load(file)
+  conf['log']['log_format'] = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  conf['conf_home'] = conf_home
+
+
+class Generator:
+
+  def __init__(self, config):
+    self._config = config
+    self._connect = vnc_api.VncApi(api_server_host=self._config['vnc']['web_server'],
+                                   api_server_port=self._config['vnc']['web_port'],
+                                   api_server_url=self._config['vnc']['base_url'],
+                                   auth_type=self._config['vnc']['authn_type'],
+                                   auth_protocol=self._config['vnc']['authn_protocol'],
+                                   auth_host=self._config['vnc']['authn_server'],
+                                   auth_port=self._config['vnc']['authn_port'],
+                                   auth_url=self._config['vnc']['authn_url'],
+                                   domain_name=self._config['vnc']['authn_domain'],
+                                   username=self._config['vnc']['authn_username'],
+                                   password=self._config['vnc']['authn_password'],
+                                   tenant_name=self._config['vnc']['authn_project'],)
+    self._logger = logging.getLogger('vnc_sync.generator')
+    self._routers = self.__get_routers__()
+    self._tmpl_vars = self.__tmpl_vars__()
+    self._j2_env = Environment(autoescape=select_autoescape(['j2']),
+                              loader=FileSystemLoader(self._config['conf_home']+'/templates'))
+
+  def __get_routers__(self):
+    routers = {}
+    for router in self._connect.logical_routers_list()['logical-routers']:
+      r_info = self._connect.logical_router_read(id=router['uuid'])
+      tags = [ ''.join(tag['to']) for tag in r_info.tag_refs ]
+      check = 0
+      target = ''
+      for vrf in self._config['vrfs'].keys():
+        if 'label=fabric-vrf-'+vrf in tags:
+          check += 1
+          target = vrf
+      if check == 0:
+        self._logger.debug("Router {} don't contain familiar vrf tag. Ignoring router...".format('/'.join(r_info.fq_name)))
+        continue
+      elif check > 1:
+        self._logger.warning("Router {} contain one more vrf tag. Ignoring router...".format('/'.join(r_info.fq_name)))
+        continue
+      self._logger.debug("Found router {}".format('/'.join(r_info.fq_name)))
+      vn = self._connect.virtual_network_read(id=r_info.virtual_network_refs[0]['uuid'])
+      tf_vrf = self._connect.routing_instance_read(id=vn.get_routing_instances()[0]['uuid'])
+      rt = tf_vrf.get_route_target_refs()[0]['to'][0].replace('target:','')
+      routers[vn.virtual_network_network_id] = { 'uuid': r_info.uuid, 
+                                                 'name': '/'.join(r_info.fq_name), 
+                                                 'related_vrf': target,
+                                                 'rt': rt}
+    return routers
+  
+  def __tmpl_vars__(self):
+    tmpl_v = {}
+    tmpl_v['main'] = self._config['main']
+    tmpl_v['cloud'] = self._config['cloud']
+    tmpl_v['vrfs'] = self._config['vrfs']
+    tmpl_v['cloud']['vrfs'] = {}
+    cl_vrfs = tmpl_v['cloud']['vrfs']
+    ip_net = '169.254.'+tmpl_v['main']['router_id'].split('.')[-1]+'.'
+    tmpl_v['main']['hostname'] = socket.gethostname()
+    ip = 1
+    # init absent parameters in vrfs config
+    for vrf in tmpl_v['vrfs'].keys():
+      tmpl_v['vrfs'][vrf]['routes']=[]
+      tmpl_v['vrfs'][vrf]['rt_import']=[]
+    # fit cloud vrf vars
+    sort_vni = self._routers.keys()
+    sort_vni.sort()
+    for vni in sort_vni:
+      router = self._routers[vni]
+      vrf_name = 'vrf-'+router['uuid'][0:11]
+      cl_vrfs[vrf_name] = {'vni': vni,
+                           'related_vrf': router['related_vrf'],
+                           'uuid': router['uuid'][0:11],
+                           'tf_router': router['name'],
+                           'vrf_ip': ip_net+str(ip),
+                           'rt': router['rt']}
+      tmpl_v['vrfs'][router['related_vrf']]['routes'].append({'vrf': vrf_name, 'ip': ip_net+str(ip)})
+      tmpl_v['vrfs'][vrf]['rt_import'].append(router['rt'])
+      ip+=1
+    return tmpl_v
+
+  def gen_frr_config(self):
+    try: 
+      tmpl = self._j2_env.get_template('frr.j2')
+    except TemplateNotFound:
+      logger.error("Template frr.j2 not found")
+      sys.exit(1)
+    config = tmpl.render(**self._tmpl_vars)
+    return config
+
+  def gen_ifupdown_config(self):
+    try: 
+      tmpl = self._j2_env.get_template('ifupdown2.j2')
+    except TemplateNotFound:
+      logger.error("Template ifupdown2.j2 not found")
+      sys.exit(1)
+    config = tmpl.render(**self._tmpl_vars)
+    return config
+
+def hash_check(content, f_path):
+  new_hash = hash(content)
+  try:
+    with open(f_path, 'r') as f:
+      old_content = f.read()
+      old_hash = hash(old_content)
+  except IOError:
+    logger.warning('Could not open file {}, will be generated new'.format(f_path))
+    old_hash = 0
+    old_content = 'None'
+  if new_hash != old_hash: return old_content
+  else: return False
+
+def ifup_update(config, path):
+  content = config.gen_ifupdown_config()
+  old_content = hash_check(content, path)
+  ext_vrfs = config._tmpl_vars['vrfs']
+  if old_content:
+    logger.info('Found updates in ifupdown config ....')
+    try:
+      with open(path, 'w') as f:
+        f.write(content)
+    except:
+      logger.error("Coudn't save new ifupdown config, exit")
+      sys.exit(1)
+    logger.debug('Ifupdown config file was updated')
+    ifaces = re.findall('(?<=auto )([\w-]*)', content)
+    sys_if = listdir('/sys/class/net/')
+    update_if = [ iface for iface in ifaces if iface not in sys_if ]
+    del_if = [ iface for iface in sys_if if iface not in ifaces and re.match('(vxl|vln|vrf).*',iface)]
+    logger.info('Adding {} to runtime...'.format(' '.join(update_if)))
+    update_if.extend(ext_vrfs.keys())
+    update_if.append('bridge')
+    if old_content == 'None':
+      for ext_vrf in ext_vrfs.keys()
+        if ext_vrfs[ext_vrf]['vlan'] == 'None':
+          update_if.append(ext_vrfs[ext_vrf]['iface']
+        else:
+          update_if.append(ext_vrf+'-peer-iface')
+    cmd_up = ['/sbin/ifup']
+    cmd_up.extend(update_if)
+    cmd_down = ['/sbin/ifdown']
+    cmd_down.extend(del_if)
+    try:
+      if len(del_if) > 0: subprocess.check_call(cmd_down)
+      subprocess.check_call(cmd_up)
+    except:
+      logger.error("Update interfaces wasn't success, rollback and exit")
+      with open(path, 'w') as f:
+        f.write(old_content)
+      sys.exit(1)
+  else:
+    logger.info('Ifupdown config is up to date')
+    
+def frr_update(config, path):
+  content = config.gen_frr_config()
+  old_content = hash_check(content, path)
+  if old_content:
+    logger.info('Found updates in frr config, reloading it....')
+    try:
+      with open(path, 'w') as f:
+        f.write(content)
+    except:
+      logger.error("Coudn't save new frr config")
+    # Use custom script until resolve https://github.com/FRRouting/frr/issues/3903
+    cmd = ['/bin/frr-reload-cust.py', '--reload', '/etc/frr/frr.conf']
+    try:
+      subprocess.check_call(cmd)
+    except:
+      logger.error("Update frr wasn't success, exit")
+      with open(path, 'w') as f:
+        f.write(old_content)
+      sys.exit(1)
+  else:
+    logger.info('Frr config is up to date')
+
+if __name__ == '__main__':
+  conf = Config.conf
+  logging.basicConfig(filename=conf['log']['file'],
+                      level=conf['log']['level'], 
+                      format=conf['log']['log_format'])
+  logger = logging.getLogger('vnc_sync')
+  logger.info('Starting synchronization...')
+  gen = Generator(conf)
+  ifup_update(gen, conf['main']['ifupdown_conf_file'])
+  frr_update(gen, conf['main']['frr_conf_file'])
+  logger.info('Synchronization complete')
+  

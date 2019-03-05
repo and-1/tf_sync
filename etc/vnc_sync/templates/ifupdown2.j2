@@ -1,0 +1,45 @@
+auto bridge
+iface bridge
+  bridge-vlan-aware yes
+  bridge-ports{%- for vrf, data in cloud.vrfs.iteritems() %} vxl-{{data.uuid}}{%endfor%}
+{% for vrf, data in cloud.vrfs.iteritems() %}
+auto {{vrf}}
+iface {{vrf}}
+   address {{data.vrf_ip}}
+   vrf-table auto
+
+auto vln-{{data.uuid}}
+iface vln-{{data.uuid}}
+  vlan-id {{data.vni}}
+  vlan-raw-device bridge
+  vrf {{vrf}}
+
+auto vxl-{{data.uuid}}
+iface vxl-{{data.uuid}}
+   vxlan-id {{data.vni}}
+   vxlan-local-tunnelip {{cloud.vxlan_address}}
+   bridge-learning off
+   bridge-access {{data.vni}}
+{% endfor %}
+{% for vrf,data in vrfs.iteritems() %}
+auto {{vrf}}
+iface {{vrf}}
+   vrf-table auto
+{%- for route in data.routes %}
+   up ip route add vrf {{vrf}} {{route.ip}}/32 dev {{route.vrf}}
+{%- endfor %}
+{% if data.vlan != 'None' %}
+auto {{data.iface}}
+iface {{data.iface}}
+
+auto {{vrf}}-peer-iface
+iface {{vrf}}-peer-iface
+   vlan-id {{data.vlan}}
+   vlan-raw-device {{data.iface}}
+{%- else %}
+auto {{data.iface}}
+iface {{data.iface}}
+{%- endif %} 
+   address {{data.address}}
+   vrf {{vrf}}
+{%- endfor %}
