@@ -5,14 +5,18 @@ import sys
 import socket
 import re
 import subprocess
-from os import listdir
+from os import listdir, path
 from jinja2 import Environment, FileSystemLoader, select_autoescape, TemplateNotFound
 from vnc_api import vnc_api
 
 class Config:
-  conf_home = '/etc/vnc_sync'
-  with open(conf_home+'/sync.conf','r') as file:
-    conf = yaml.safe_load(file)
+  conf_home = path.dirname(__file__)+'/etc/vnc_sync'
+  try:
+    with open(conf_home+'/sync.conf','r') as file:
+      conf = yaml.safe_load(file)
+  except:
+    print("ERROR: couldn't find config file")
+    sys.exit(1)
   conf['log']['log_format'] = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
   conf['conf_home'] = conf_home
 
@@ -33,11 +37,14 @@ class Generator:
                                    username=self._config['vnc']['authn_username'],
                                    password=self._config['vnc']['authn_password'],
                                    tenant_name=self._config['vnc']['authn_project'],)
-    self._logger = logging.getLogger('vnc_sync.generator')
-    self._routers = self.__get_routers__()
-    self._tmpl_vars = self.__tmpl_vars__()
     self._j2_env = Environment(autoescape=select_autoescape(['j2']),
                               loader=FileSystemLoader(self._config['conf_home']+'/templates'))
+    self._logger = logging.getLogger('vnc_sync.generator')
+    if self._config['main']['mode'] == 'evpn':
+      self._routers = self.__get_routers__()
+    if self._config['main']['mode'] == 'tf_chain':
+      self._networks = self.__get_networks__()      
+    self._tmpl_vars = self.__tmpl_vars__()
 
   def __get_routers__(self):
     routers = {}
@@ -65,43 +72,88 @@ class Generator:
                                                  'related_vrf': target,
                                                  'rt': rt}
     return routers
-  
+
+  def __get_networks__(self):
+    tmp_file = '/tmp/vnc_sync_ri.tmp'
+    try:
+      with open(tmp_file,'r') as file:
+        ri_exist = yaml.safe_load(file)
+    except IOError:
+        ri_exist = {}
+    networks = {}
+    rts = self._connect.route_targets_list()['route-targets']
+    for vrf in self._config['vrfs'].keys():
+      if not ri_exist.has_key(vrf): 
+        ri_exist[vrf] = {'ris': []}
+        ri_exist[vrf]['networks'] = []
+      networks[vrf] = ri_exist[vrf]['networks']  
+      param = self._config['vrfs'][vrf]
+      rt_id = self._connect.fq_name_to_id('route-target', ['target:'+param['import_rt']]) 
+      rt = self._connect.route_target_read(id=rt_id)
+      for ri in rt.get_routing_instance_back_refs():
+        if ri['uuid'] not in ri_exist[vrf]['ris'] and ri['attr']['import_export'] == 'export':
+          ri_exist[vrf]['ris'].append(ri['uuid'])
+          ri_info = self._connect.routing_instance_read(id=ri['uuid'])
+          net = self._connect.virtual_network_read(id=self._connect.fq_name_to_id(ri_info.parent_types[0], ri_info.get_parent_fq_name()))
+          for subnet in net.get_network_ipam_refs()[0]['attr'].get_ipam_subnets():
+            cidr = '{}/{}'.format(subnet.get_subnet().get_ip_prefix(),subnet.get_subnet().get_ip_prefix_len())
+            ri_exist[vrf]['networks'].append(cidr)
+            self._logger.debug("Network {} will be added to frr confg (vrf {})".format(cidr, vrf))
+    try:
+      with open(tmp_file,'w') as file:
+        yaml.safe_dump(ri_exist, file)
+    except IOError:
+      self._logger.debug("Couldn't save to temporary file ({})".format(tmp_file))
+      sys.exit(1)
+    return networks
+
+
   def __tmpl_vars__(self):
     tmpl_v = {}
     tmpl_v['main'] = self._config['main']
-    tmpl_v['cloud'] = self._config['cloud']
     tmpl_v['vrfs'] = self._config['vrfs']
-    tmpl_v['cloud']['vrfs'] = {}
-    cl_vrfs = tmpl_v['cloud']['vrfs']
-    ip_net = '169.254.'+tmpl_v['main']['router_id'].split('.')[-1]+'.'
     tmpl_v['main']['hostname'] = socket.gethostname()
-    ip = 1
-    # init absent parameters in vrfs config
-    for vrf in tmpl_v['vrfs'].keys():
-      tmpl_v['vrfs'][vrf]['routes']=[]
-      tmpl_v['vrfs'][vrf]['rt_import']=[]
-    # fit cloud vrf vars
-    sort_vni = self._routers.keys()
-    sort_vni.sort()
-    for vni in sort_vni:
-      router = self._routers[vni]
-      vrf_name = 'vrf-'+router['uuid'][0:11]
-      cl_vrfs[vrf_name] = {'vni': vni,
-                           'related_vrf': router['related_vrf'],
-                           'uuid': router['uuid'][0:11],
-                           'tf_router': router['name'],
-                           'vrf_ip': ip_net+str(ip),
-                           'rt': router['rt']}
-      tmpl_v['vrfs'][router['related_vrf']]['routes'].append({'vrf': vrf_name, 'ip': ip_net+str(ip)})
-      tmpl_v['vrfs'][vrf]['rt_import'].append(router['rt'])
-      ip+=1
+    if self._config['main']['mode'] == 'evpn':
+      tmpl_v['cloud'] = self._config['cloud']
+      tmpl_v['cloud']['vrfs'] = {}
+      cl_vrfs = tmpl_v['cloud']['vrfs']
+      ip_net = '169.254.'+tmpl_v['main']['router_id'].split('.')[-1]+'.'
+      ip = 1
+      # init absent parameters in vrfs config
+      for vrf in tmpl_v['vrfs'].keys():
+        tmpl_v['vrfs'][vrf]['routes']=[]
+        tmpl_v['vrfs'][vrf]['rt_import']=[]
+      # fit cloud vrf vars
+      sort_vni = self._routers.keys()
+      sort_vni.sort()
+      for vni in sort_vni:
+        router = self._routers[vni]
+        vrf_name = 'vrf-'+router['uuid'][0:11]
+        cl_vrfs[vrf_name] = {'vni': vni,
+                             'related_vrf': router['related_vrf'],
+                             'uuid': router['uuid'][0:11],
+                             'tf_router': router['name'],
+                             'vrf_ip': ip_net+str(ip),
+                             'rt': router['rt']}
+        tmpl_v['vrfs'][router['related_vrf']]['routes'].append({'vrf': vrf_name, 'ip': ip_net+str(ip)})
+        tmpl_v['vrfs'][vrf]['rt_import'].append(router['rt'])
+        ip+=1
+
+    if self._config['main']['mode'] == 'tf_chain':
+      for vrf in self._config['vrfs'].keys():
+        tmpl_v['vrfs'][vrf]['networks'] = self._networks[vrf]
+
     return tmpl_v
 
   def gen_frr_config(self):
+    if self._config['main']['mode'] == 'evpn':
+      tmpl_f = 'frr_evpn.j2'
+    if self._config['main']['mode'] == 'tf_chain':
+      tmpl_f = 'frr_chain.j2'
     try: 
-      tmpl = self._j2_env.get_template('frr.j2')
+      tmpl = self._j2_env.get_template(tmpl_f)
     except TemplateNotFound:
-      logger.error("Template frr.j2 not found")
+      logger.error("Template {} not found".format(tmpl_f))
       sys.exit(1)
     config = tmpl.render(**self._tmpl_vars)
     return config
@@ -149,9 +201,9 @@ def ifup_update(config, path):
     update_if.extend(ext_vrfs.keys())
     update_if.append('bridge')
     if old_content == 'None':
-      for ext_vrf in ext_vrfs.keys()
+      for ext_vrf in ext_vrfs.keys():
         if ext_vrfs[ext_vrf]['vlan'] == 'None':
-          update_if.append(ext_vrfs[ext_vrf]['iface']
+          update_if.append(ext_vrfs[ext_vrf]['iface'])
         else:
           update_if.append(ext_vrf+'-peer-iface')
     cmd_up = ['/sbin/ifup']
@@ -180,7 +232,9 @@ def frr_update(config, path):
     except:
       logger.error("Coudn't save new frr config")
     # Use custom script until resolve https://github.com/FRRouting/frr/issues/3903
-    cmd = ['/bin/frr-reload-cust.py', '--reload', '/etc/frr/frr.conf']
+    # TODO check reload with evpn mode on frr 7.0
+    #cmd = ['/bin/frr-reload-cust.py', '--reload', '/etc/frr/frr.conf']
+    cmd = ['systemctl', 'reload', 'frr']
     try:
       subprocess.check_call(cmd)
     except:
@@ -192,14 +246,17 @@ def frr_update(config, path):
     logger.info('Frr config is up to date')
 
 if __name__ == '__main__':
+  print(Config.conf['conf_home'])
   conf = Config.conf
+
   logging.basicConfig(filename=conf['log']['file'],
                       level=conf['log']['level'], 
                       format=conf['log']['log_format'])
   logger = logging.getLogger('vnc_sync')
   logger.info('Starting synchronization...')
   gen = Generator(conf)
-  ifup_update(gen, conf['main']['ifupdown_conf_file'])
+  if conf['main']['mode'] == 'evpn':
+    ifup_update(gen, conf['main']['ifupdown_conf_file'])
   frr_update(gen, conf['main']['frr_conf_file'])
   logger.info('Synchronization complete')
   

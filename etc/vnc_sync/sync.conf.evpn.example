@@ -12,6 +12,7 @@ vnc:
   authn_project: admin
   authn_password: xWXZxsRRNBtcXpl
 main:
+  mode: evpn
   router_id: 192.168.0.200
   as: 64512
   frr_conf_file: /etc/frr/frr.conf

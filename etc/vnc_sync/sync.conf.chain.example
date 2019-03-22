@@ -1,0 +1,37 @@
+vnc:
+  web_server: contrail-config-api-regionone.logistic.lan
+  web_port: 80
+  base_url: '/'
+  authn_type: keystone
+  authn_protocol: http
+  authn_server: keystone.logistic.lan
+  authn_port: 80
+  authn_url: /v3/auth/tokens
+  authn_domain: default
+  authn_username: admin
+  authn_project: admin
+  authn_password: DCepQWQentJgbvy
+main:
+  mode: tf_chain
+  router_id: 192.168.0.200
+  as: 64512
+  frr_conf_file: /etc/frr/frr.conf
+  ifupdown_conf_file: /etc/network/interfaces.d/ifaces
+vrfs:
+  DEV:
+    bgp_peers: 
+    - 192.168.2.1
+    peer_as: external
+    iface: ens3
+    import_rt: 64512:101
+  TEST:
+    bgp_peers: 
+    - 192.168.1.1
+    peer_as: external
+# iface is interface to hub network
+    iface: ens4
+    import_rt: 64512:100
+log:
+  file: /var/log/vnc_sync.log
+  level: INFO
+

@@ -1,0 +1,86 @@
+frr version 7.0
+frr defaults traditional
+hostname {{main.hostname}}
+log file /var/log/frr/frr.log
+no ipv6 forwarding
+service integrated-vtysh-config
+!
+{%- for vrf, data in cloud.vrfs.iteritems() %}
+vrf {{vrf}}
+ vni {{data.vni}}
+ exit-vrf
+!
+{%- endfor %}
+router bgp {{main.as}}
+ bgp router-id {{main.router_id}}
+ neighbor cloud peer-group
+ neighbor cloud remote-as {{cloud.peer_as}}
+ neighbor cloud capability extended-nexthop
+{%- for peer in cloud.bgp_peers%}
+ neighbor {{peer}} peer-group cloud
+{%- endfor %}
+ !
+ address-family ipv4 unicast
+  no neighbor cloud activate
+ exit-address-family
+ !
+ address-family l2vpn evpn
+  neighbor cloud activate
+  advertise-all-vni
+ exit-address-family
+!
+{%- for vrf, data in cloud.vrfs.iteritems() %}
+router bgp {{main.as}} vrf {{vrf}}
+ bgp router-id {{main.router_id}}
+ !
+ address-family ipv4 unicast
+  redistribute static
+ exit-address-family
+ !
+ address-family l2vpn evpn
+  advertise ipv4 unicast
+   route-target import {{data.rt}}
+   route-target export {{data.rt}}
+ exit-address-family
+!
+{%- endfor %}
+{%- for vrf, data in vrfs.iteritems() %}
+router bgp 64512 vrf {{vrf}}
+ bgp router-id {{main.router_id}}
+ neighbor {{vrf}} peer-group
+ neighbor {{vrf}} remote-as external
+ neighbor {{vrf}} capability extended-nexthop
+{%- for peer in data.bgp_peers%}
+ neighbor {{peer}} peer-group {{vrf}}
+{%- endfor %}
+ !
+ address-family ipv4 unicast
+  no neighbor {{vrf}} send-community all
+  table-map {{vrf}}-import
+ exit-address-family
+ !
+ address-family l2vpn evpn
+{%- for rt in data.rt_import %}
+   route-target import {{rt}}
+{%- endfor %}
+ exit-address-family
+!
+{%- endfor %}
+{%- for vrf, data in cloud.vrfs.iteritems() %}
+ip extcommunity-list standard {{vrf}} permit rt {{data.rt}}
+ip route 0.0.0.0/0 {{data.related_vrf}} nexthop-vrf {{data.related_vrf}} vrf {{vrf}}
+{%- endfor %}
+{%- for vrf, data in vrfs.iteritems() %}
+{%- for nh in data.bgp_peers %}
+ip route 0.0.0.0/0 {{nh}} vrf {{vrf}}
+{%- endfor %}
+{%- endfor %}
+!
+{%- for vrf, data in cloud.vrfs.iteritems() %}
+route-map {{data.related_vrf}}-import permit {{data.vni}}
+ match extcommunity {{vrf}}
+ set ip next-hop {{data.vrf_ip}}
+!
+{%- endfor %}
+line vty
+!

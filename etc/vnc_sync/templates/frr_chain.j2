@@ -1,0 +1,30 @@
+frr version 7.0
+frr defaults traditional
+hostname {{main.hostname}}
+log file /var/log/frr/frr.log
+no ipv6 forwarding
+service integrated-vtysh-config
+!
+{%- for vrf, data in vrfs.iteritems() %}
+router bgp 64512 vrf {{vrf}}
+ bgp router-id {{main.router_id}}
+ neighbor {{vrf}} peer-group
+ neighbor {{vrf}} remote-as external
+ neighbor {{vrf}} capability extended-nexthop
+{%- for peer in data.bgp_peers%}
+ neighbor {{peer}} peer-group {{vrf}}
+{%- endfor %}
+ !
+ address-family ipv4 unicast
+   redistribute static
+ exit-address-family
+!
+{%- endfor %}
+{%- for vrf, data in vrfs.iteritems() %}
+{%- for route in data.networks %}
+ip route {{route}} {{data.iface}} vrf {{vrf}}
+{%- endfor %}
+{%- endfor %}
+!
+line vty
+!
