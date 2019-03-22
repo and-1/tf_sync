@@ -14,8 +14,11 @@ class Config:
   try:
     with open(conf_home+'/sync.conf','r') as file:
       conf = yaml.safe_load(file)
-  except:
-    print("ERROR: couldn't find config file")
+  except IOError:
+    print("ERROR: couldn't read config file")
+    sys.exit(1)
+  except yaml.YAMLError, exc:
+    print("Error in configuration file: {}".format(exc))
     sys.exit(1)
   conf['log']['log_format'] = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
   conf['conf_home'] = conf_home
