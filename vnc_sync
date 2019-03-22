@@ -246,7 +246,6 @@ def frr_update(config, path):
     logger.info('Frr config is up to date')
 
 if __name__ == '__main__':
-  print(Config.conf['conf_home'])
   conf = Config.conf
 
   logging.basicConfig(filename=conf['log']['file'],
