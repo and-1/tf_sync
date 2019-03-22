@@ -24,6 +24,7 @@ vrfs:
     peer_as: external
     iface: ens3
     import_rt: 64512:101
+    lif_id: c0c8ef0a-4827-47d7-ba74-3d5a87be4fea
   TEST:
     bgp_peers: 
     - 192.168.1.1
@@ -31,6 +32,7 @@ vrfs:
 # iface is interface to hub network
     iface: ens4
     import_rt: 64512:100
+    lif_id: c0c8ef0a-4827-47d7-ba74-3d5a87be4fea
 log:
   file: /var/log/vnc_sync.log
   level: INFO
