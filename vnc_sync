@@ -94,8 +94,11 @@ class Generator:
       for vmi_ip in vmi.get_instance_ip_back_refs():
         if re.match('.*v4-health-check.*', vmi_ip['to'][0]):
           ip_id = vmi_ip['uuid']
-      ip_info = self._connect.instance_ip_read(id=ip_id)
-      check_ip = ip_info.get_instance_ip_address()
+          ip_info = self._connect.instance_ip_read(id=ip_id)
+          check_ip = ip_info.get_instance_ip_address()
+          break
+        else: 
+          check_ip = None
       # get tenant networks
       rt_id = self._connect.fq_name_to_id('route-target', ['target:'+param['import_rt']]) 
       rt = self._connect.route_target_read(id=rt_id)
@@ -115,7 +118,8 @@ class Generator:
             ri_exist[vrf][ri_uuid].append(cidr)
             self._logger.debug("Network {} will be added to frr confg (vrf {})".format(cidr, vrf))
       networks[vrf] = [ net for uuid,nets in ri_exist[vrf].iteritems() for net in nets]
-      networks[vrf].append('{}/32'.format(check_ip))
+      if check_ip:
+        networks[vrf].append('{}/32'.format(check_ip))
     try:
       with open(tmp_file,'w') as file:
         yaml.safe_dump(ri_exist, file)
