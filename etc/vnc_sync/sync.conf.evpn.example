@@ -30,6 +30,8 @@ vrfs:
     bgp_peers: 
     - 192.168.100.138
     peer_as: external
+    static:
+    - 169.254.254.253/32
 # For vlan key available values: 'None', vlan_id
 # If vlan_id is set, 'iface' value will be parant iface name
     vlan: None

@@ -16,7 +16,12 @@ router bgp 64512 vrf {{vrf}}
 {%- endfor %}
  !
  address-family ipv4 unicast
-   redistribute static
+  redistribute static
+{%- if data.static is defined and data.static | length > 0 %}
+{%- for route in data.static %}
+  network {{route}}
+{%- endfor %}
+{%- endif %}
  exit-address-family
 !
 {%- endfor %}
