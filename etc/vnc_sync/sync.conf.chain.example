@@ -17,6 +17,8 @@ main:
   as: 64512
   frr_conf_file: /etc/frr/frr.conf
   ifupdown_conf_file: /etc/network/interfaces.d/ifaces
+  peer_keepalive: 3
+  peer_holdtime: 9
 vrfs:
   DEV:
     bgp_peers: 

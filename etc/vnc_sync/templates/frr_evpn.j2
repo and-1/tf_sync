@@ -48,6 +48,7 @@ router bgp {{main.as}} vrf {{vrf}}
 router bgp 64512 vrf {{vrf}}
  bgp router-id {{main.router_id}}
  neighbor {{vrf}} peer-group
+ neighbor {{vrf}} timer {{main.peer_keepalive|default('30')}} {{main.peer_holdtime|default('90')}}
  neighbor {{vrf}} remote-as external
  neighbor {{vrf}} capability extended-nexthop
 {%- for peer in data.bgp_peers%}
