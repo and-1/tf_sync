@@ -1,3 +1,4 @@
+# Credentials for sync. TF config api and keystone endpoints
 vnc:
   web_server: contrail-config-api-regionone.logistic.lan
   web_port: 80
@@ -12,29 +13,38 @@ vnc:
   authn_project: admin
   authn_password: xWXZxsRRNBtcXpl
 main:
+# Mode of synchronization [tf_chain, evpn]
   mode: evpn
   router_id: 192.168.0.200
   as: 64512
+# Path to generated config
   frr_conf_file: /etc/frr/frr.conf
   ifupdown_conf_file: /etc/network/interfaces.d/evpn_cloud
+# Parameters for connection from router to cloud
 cloud:
   bgp_peers:
   - 192.168.1.1
   peer_as: internal
   vxlan_address: 192.168.0.200
   bgp_source_addr: 192.168.1.200
+# List of output vrfs
 vrfs:
 # VRF name must be the same as suffix of label on router in TF
   dev:
+# Address of output interface (to outsite)
     address: 192.168.100.200/24
+# List of BGP peers
     bgp_peers: 
     - 192.168.100.138
+# IF AS same as AS preer set internal and vice versa
     peer_as: external
+# Static route, which will be add to vrf
     static:
     - 169.254.254.253/32
 # For vlan key available values: 'None', vlan_id
 # If vlan_id is set, 'iface' value will be parant iface name
     vlan: None
+# iface is interface name in router to outside
     iface: ens7
 #  test:
 #  stage:

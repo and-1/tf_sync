@@ -1,3 +1,4 @@
+# Credentials for sync. TF config api and keystone endpoints
 vnc:
   web_server: contrail-config-api-regionone.logistic.lan
   web_port: 80
@@ -12,29 +13,38 @@ vnc:
   authn_project: admin
   authn_password: DCepQWQentJgbvy
 main:
+# Mode of synchronization [tf_chain, evpn]
   mode: tf_chain
   router_id: 192.168.0.200
   as: 64512
+# Path to generated config
   frr_conf_file: /etc/frr/frr.conf
   ifupdown_conf_file: /etc/network/interfaces.d/ifaces
+# Parameters of bgp session
   peer_keepalive: 3
   peer_holdtime: 9
+# List of output vrfs
 vrfs:
   DEV:
+# List of BGP peers
     bgp_peers: 
     - 192.168.2.1
+# IF AS same as AS preer set internal and vice versa
     peer_as: external
+# Iface is interface name in router to hub network
     iface: ens3
+# Import route target of environment. Same as import rt of hub network
     import_rt: 64512:101
+# ID of "iface" in OpenStack (TF)
     lif_id: c0c8ef0a-4827-47d7-ba74-3d5a87be4fea
   TEST:
     bgp_peers: 
     - 192.168.1.1
     peer_as: external
-# iface is interface to hub network
     iface: ens4
     import_rt: 64512:100
     lif_id: c0c8ef0a-4827-47d7-ba74-3d5a87be4fea
+# Static route, which will be add to vrf
     static:
     - 192.168.254.253/32
 log:
